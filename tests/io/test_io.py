@@ -4,11 +4,14 @@
 
 """Tests for `io` module."""
 
+import datetime as dt
+
 import fsspec
 import h5py
 import numpy as np
 import pytest
 import xarray as xr
+from open_radar_data import DATASETS
 
 import xradar.io
 from tests import skip_import
@@ -29,9 +32,22 @@ from xradar.model import (
 )
 
 
-def test_open_cfradial1_datatree(cfradial1_file):
-    dtree = open_cfradial1_datatree(
-        cfradial1_file, first_dim="time", site_as_coords=False
+def _seconds_since_epoch(timestamp: str):
+    value = np.datetime64(timestamp.removesuffix("Z"), "ns")
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    return np.float64((value - epoch) / np.timedelta64(1, "s"))
+
+
+def _assert_time_coverage(value, timestamp):
+    expected = _seconds_since_epoch(timestamp)
+    # The reference timestamp has whole-second precision, while coverage can
+    # retain fractional seconds; require it to fall within that one-second span.
+    assert expected <= value < expected + 1
+
+
+def test_open_cfradial1_datatree(cfradial1_file, closing):
+    dtree = closing(
+        open_cfradial1_datatree(cfradial1_file, first_dim="time", site_as_coords=False)
     )
     attrs = dtree.attrs
 
@@ -50,8 +66,8 @@ def test_open_cfradial1_datatree(cfradial1_file):
     assert rvars["volume_number"] == 36
     assert rvars["platform_type"] == b"fixed"
     assert rvars["instrument_type"] == b"radar"
-    assert rvars["time_coverage_start"] == b"2008-06-04T00:15:03Z"
-    assert rvars["time_coverage_end"] == b"2008-06-04T00:22:17Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2008-06-04T00:15:03Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2008-06-04T00:22:17Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(22.526699))
@@ -106,8 +122,8 @@ def test_open_cfradial1_dataset(cfradial1_file):
 
 
 @pytest.mark.parametrize("sweep", ["sweep_0", 0, [0, 1], ["sweep_0", "sweep_1"]])
-def test_open_odim_datatree_sweep(odim_file, sweep):
-    dtree = open_odim_datatree(odim_file, sweep=sweep)
+def test_open_odim_datatree_sweep(odim_file, sweep, closing):
+    dtree = closing(open_odim_datatree(odim_file, sweep=sweep))
     if isinstance(sweep, (str, int)):
         lswp = len([sweep])
     else:
@@ -115,8 +131,8 @@ def test_open_odim_datatree_sweep(odim_file, sweep):
     assert len(dtree.match("sweep_*")) == lswp
 
 
-def test_open_odim_datatree(odim_file):
-    dtree = open_odim_datatree(odim_file)
+def test_open_odim_datatree(odim_file, closing):
+    dtree = closing(open_odim_datatree(odim_file))
     # root_attrs
     attrs = dtree.attrs
     assert attrs["Conventions"] == "ODIM_H5/V2_2"
@@ -126,8 +142,8 @@ def test_open_odim_datatree(odim_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2018-12-20T06:06:28Z"
-    assert rvars["time_coverage_end"] == "2018-12-20T06:10:42Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2018-12-20T06:06:28Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2018-12-20T06:10:42Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(-33.7008018))
@@ -135,7 +151,7 @@ def test_open_odim_datatree(odim_file):
     np.testing.assert_almost_equal(rcoords["altitude"].values, np.array(195.0))
 
     # iterate over subgroups and check some values
-    moments = ["PHIDP", "VRADH", "DBZH", "TH", "ZDR", "RHOHV", "WRADH", "KDP"]
+    moments = ["PHIDP", "VRADH", "DBZH", "DBTH", "ZDR", "RHOHV", "WRADH", "KDP"]
     elevations = [
         0.5,
         0.9,
@@ -203,7 +219,7 @@ def test_open_odim_dataset(odim_file, first_dim, fix_second_angle):
         assert dict(ds.sizes) == {dim0: 360, "range": 1200}
         assert set(ds.data_vars) & (
             sweep_dataset_vars | non_standard_sweep_dataset_vars
-        ) == {"WRADH", "VRADH", "PHIDP", "DBZH", "RHOHV", "KDP", "TH", "ZDR"}
+        ) == {"WRADH", "VRADH", "PHIDP", "DBZH", "RHOHV", "KDP", "DBTH", "ZDR"}
         assert ds.sweep_number == 0
 
     # open last sweep group
@@ -217,7 +233,7 @@ def test_open_odim_dataset(odim_file, first_dim, fix_second_angle):
         assert dict(ds.sizes) == {dim0: 360, "range": 280}
         assert set(ds.data_vars) & (
             sweep_dataset_vars | non_standard_sweep_dataset_vars
-        ) == {"VRADH", "KDP", "WRADH", "TH", "RHOHV", "PHIDP", "ZDR", "DBZH"}
+        ) == {"VRADH", "KDP", "WRADH", "DBTH", "RHOHV", "PHIDP", "ZDR", "DBZH"}
         assert ds.sweep_number == 11
 
 
@@ -253,8 +269,8 @@ def test_open_odim_store(odim_file):
 
 
 @pytest.mark.parametrize("sweep", ["sweep_0", 0, [0, 1], ["sweep_0", "sweep_1"]])
-def test_open_gamic_datatree_sweep(gamic_file, sweep):
-    dtree = open_gamic_datatree(gamic_file, sweep=sweep)
+def test_open_gamic_datatree_sweep(gamic_file, sweep, closing):
+    dtree = closing(open_gamic_datatree(gamic_file, sweep=sweep))
     if isinstance(sweep, (str, int)):
         lswp = len([sweep])
     else:
@@ -262,8 +278,8 @@ def test_open_gamic_datatree_sweep(gamic_file, sweep):
     assert len(dtree.match("sweep_*")) == lswp
 
 
-def test_open_gamic_datatree(gamic_file):
-    dtree = open_gamic_datatree(gamic_file)
+def test_open_gamic_datatree(gamic_file, closing):
+    dtree = closing(open_gamic_datatree(gamic_file))
 
     # root_attrs
     attrs = dtree.attrs
@@ -274,8 +290,8 @@ def test_open_gamic_datatree(gamic_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2018-06-01T05:40:47Z"
-    assert rvars["time_coverage_end"] == "2018-06-01T05:44:16Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2018-06-01T05:40:47Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2018-06-01T05:44:16Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(50.9287272))
@@ -426,7 +442,10 @@ def test_open_gamic_dataset_reindex(gamic_file):
     # open first sweep group
     reindex_angle = dict(start_angle=0, stop_angle=360, angle_res=1.0, direction=1)
     with xr.open_dataset(
-        gamic_file, group="sweep_0", engine="gamic", reindex_angle=reindex_angle
+        gamic_file,
+        group="sweep_0",
+        engine="gamic",
+        reindex_coord={"angle": reindex_angle},
     ) as ds:
         assert dict(ds.sizes) == {"azimuth": 360, "range": 360}
 
@@ -516,8 +535,8 @@ def test_open_rainbow_datatree(rainbow_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2013-05-10T00:00:06Z"
-    assert rvars["time_coverage_end"] == "2013-05-10T00:03:14Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2013-05-10T00:00:06Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2013-05-10T00:03:14Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(50.856633))
@@ -609,8 +628,8 @@ def test_open_iris_datatree(iris0_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2013-11-25T10:55:04Z"
-    assert rvars["time_coverage_end"] == "2013-11-25T10:59:24Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2013-11-25T10:55:04Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2013-11-25T10:59:24Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(9.331))
@@ -735,8 +754,8 @@ def test_open_iris1_dataset(iris1_file):
 @pytest.mark.parametrize(
     "compression, compression_opts", [("gzip", 0), ("gzip", 6), ("gzip", 9)]
 )
-def test_odim_roundtrip(odim_file2, temp_file, compression, compression_opts):
-    dtree = open_odim_datatree(odim_file2)
+def test_odim_roundtrip(odim_file2, temp_file, compression, compression_opts, closing):
+    dtree = closing(open_odim_datatree(odim_file2))
     xradar.io.to_odim(
         dtree,
         temp_file,
@@ -744,14 +763,22 @@ def test_odim_roundtrip(odim_file2, temp_file, compression, compression_opts):
         compression=compression,
         compression_opts=compression_opts,
     )
-    dtree2 = open_odim_datatree(temp_file, reindex_angle=False)
+    start = dt.datetime.fromtimestamp(
+        dtree.ds.time_coverage_start.item(), dt.timezone.utc
+    )
+    end = dt.datetime.fromtimestamp(dtree.ds.time_coverage_end.item(), dt.timezone.utc)
+    with h5py.File(temp_file, "r") as exported:
+        assert exported["what"].attrs["date"].decode() == start.strftime("%Y%m%d")
+        assert exported["what"].attrs["time"].decode() == end.strftime("%H%M%S")
+
+    dtree2 = closing(open_odim_datatree(temp_file, reindex_angle=False))
     for d0, d1 in zip(dtree.groups, dtree2.groups):
         xr.testing.assert_equal(dtree[d0].ds, dtree2[d1].ds)
 
 
-def test_odim_optional_how(odim_file2, make_temp_file):
+def test_odim_optional_how(odim_file2, make_temp_file, closing):
     temp_file = make_temp_file()
-    dtree = open_odim_datatree(odim_file2)
+    dtree = closing(open_odim_datatree(odim_file2))
     xradar.io.to_odim(
         dtree,
         temp_file,
@@ -792,6 +819,99 @@ def test_odim_optional_how(odim_file2, make_temp_file):
         assert "stopelA" not in ds_how
 
 
+def test_write_odim_source_from_attrs(odim_file, odim_file2, make_temp_file, closing):
+    # identifiers stored by the ODIM reader are written back (#98)
+    dtree = closing(open_odim_datatree(odim_file2))
+    temp_file = make_temp_file()
+    xradar.io.to_odim(dtree, temp_file)
+    with h5py.File(temp_file) as f:
+        assert f["what"].attrs["source"].decode() == "WMO:01104,NOD:norst"
+    dtree2 = closing(open_odim_datatree(temp_file))
+    assert dtree2.attrs["wmo__id"] == "01104"
+    assert dtree2.attrs["node"] == "norst"
+
+    # an explicit source wins
+    temp_file = make_temp_file()
+    xradar.io.to_odim(dtree, temp_file, source="NOD:xxxxx")
+    with h5py.File(temp_file) as f:
+        assert f["what"].attrs["source"].decode() == "NOD:xxxxx"
+
+    # only PLC is stored, no mandatory identifier
+    dtree = closing(open_odim_datatree(odim_file))
+    with pytest.raises(ValueError, match="got 'PLC:T/Hills'"):
+        xradar.io.to_odim(dtree, make_temp_file())
+
+
+def test_write_odim_source_all_identifiers(make_temp_file, closing):
+    dtree = closing(open_odim_datatree(DATASETS.fetch("202506090955_fianj_PVOL.h5")))
+    temp_file = make_temp_file()
+    xradar.io.to_odim(dtree, temp_file)
+    with h5py.File(temp_file) as f:
+        assert f["what"].attrs["source"].decode() == (
+            "WMO:02954,PLC:Anjalankoski,NOD:fianj,WIGOS:0-246-0-101234"
+        )
+
+
+@pytest.mark.parametrize(
+    ("attrs", "expected"),
+    [
+        ({"node": "norst", "wmo__id": "01104"}, "WMO:01104,NOD:norst"),
+        ({"node": "", "site_name": "Somewhere"}, "PLC:Somewhere"),
+        ({"instrument_name": "radar"}, None),
+    ],
+)
+def test_get_odim_source(attrs, expected):
+    from xradar.io.export.odim import _get_odim_source
+
+    assert _get_odim_source(attrs) == expected
+
+
+def test_odim_total_power_names(odim_file, tmp_path):
+    # ODIM TH/TV are logged (dBZ, ODIM_H5 2.4 Table 16), which is DBTH/DBTV in
+    # FM301 (Table 301-9), where TH/TV are linear (#109)
+    import shutil
+
+    with xr.open_dataset(odim_file, group="sweep_0", engine="odim") as ds:
+        assert "TH" not in ds
+        assert ds.DBTH.attrs["units"] == "dBZ"
+        assert (
+            ds.DBTH.attrs["standard_name"] == "radar_equivalent_reflectivity_factor_h"
+        )
+        with h5py.File(odim_file) as f:
+            quantities = {
+                f[f"dataset1/{k}/what"].attrs["quantity"].decode(): k
+                for k in f["dataset1"]
+                if k.startswith("data")
+            }
+            gain = f[f"dataset1/{quantities['TH']}/what"].attrs["gain"]
+        # same values as in the file (dBZ, not converted)
+        assert ds.DBTH.encoding["scale_factor"] == gain
+
+    path = tmp_path / "odim_tv.h5"
+    shutil.copy(odim_file, path)
+    with h5py.File(path, "a") as f:
+        f[f"dataset1/{quantities['TH']}/what"].attrs["quantity"] = np.bytes_("TV")
+    with xr.open_dataset(path, group="sweep_0", engine="odim") as ds:
+        assert "DBTV" in ds and "DBTH" not in ds
+        assert ds.DBTV.attrs["units"] == "dBZ"
+
+
+def test_odim_total_power_roundtrip(odim_file, tmp_path):
+    # DBTH is written as ODIM TH again
+    dtree = open_odim_datatree(odim_file, sweep=[0])
+    path = tmp_path / "odim_th.h5"
+    xradar.io.to_odim(dtree, path, source="RAD:AU71")
+    with h5py.File(path) as f:
+        quantities = [
+            f[f"dataset1/{k}/what"].attrs["quantity"].decode()
+            for k in f["dataset1"]
+            if k.startswith("data")
+        ]
+    assert "TH" in quantities and "DBTH" not in quantities
+    dtree2 = open_odim_datatree(path)
+    xr.testing.assert_equal(dtree2["sweep_0"].ds.DBTH, dtree["sweep_0"].ds.DBTH)
+
+
 def test_write_odim_source(rainbow_file2, temp_file):
     dtree = open_rainbow_datatree(rainbow_file2)
     with pytest.raises(ValueError):
@@ -800,6 +920,9 @@ def test_write_odim_source(rainbow_file2, temp_file):
             temp_file,
             source="PLC:Wideumont",
         )
+    # no identifiers in the attributes either
+    with pytest.raises(ValueError, match="got None"):
+        xradar.io.to_odim(dtree, temp_file)
 
     xradar.io.to_odim(
         dtree,
@@ -844,7 +967,7 @@ def test_open_datamet_dataset_reindex(datamet_file):
         group="sweep_10",
         engine="datamet",
         decode_coords=True,
-        reindex_angle=reindex_angle,
+        reindex_coord={"angle": reindex_angle},
     ) as ds:
         assert dict(ds.sizes) == {"azimuth": 180, "range": 1332}
 
@@ -861,8 +984,8 @@ def test_open_datamet_datatree(datamet_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2019-07-10T07:00:00Z"
-    assert rvars["time_coverage_end"] == "2019-07-10T07:00:00Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2019-07-10T07:00:00Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2019-07-10T07:00:00Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(41.9394))
@@ -904,8 +1027,8 @@ def test_open_datamet_datatree(datamet_file):
 
 
 @pytest.mark.parametrize("first_dim", ["time", "auto"])
-def test_cfradfial2_roundtrip(cfradial1_file, make_temp_file, first_dim):
-    dtree0 = open_cfradial1_datatree(cfradial1_file, first_dim=first_dim)
+def test_cfradfial2_roundtrip(cfradial1_file, make_temp_file, first_dim, closing):
+    dtree0 = closing(open_cfradial1_datatree(cfradial1_file, first_dim=first_dim))
     # first write to cfradial2
     outfile = make_temp_file()
     xradar.io.to_cfradial2(dtree0.copy(), outfile)
@@ -927,9 +1050,9 @@ def test_cfradfial2_roundtrip(cfradial1_file, make_temp_file, first_dim):
                 xr.testing.assert_equal(dtree1[d1].ds, dtree2[d2].ds)
 
 
-def test_cfradial_n_points_file(cfradial1n_file):
-    dtree = open_cfradial1_datatree(
-        cfradial1n_file, first_dim="auto", site_as_coords=False
+def test_cfradial_n_points_file(cfradial1n_file, closing):
+    dtree = closing(
+        open_cfradial1_datatree(cfradial1n_file, first_dim="auto", site_as_coords=False)
     )
     attrs = dtree.attrs
 
@@ -945,8 +1068,8 @@ def test_cfradial_n_points_file(cfradial1n_file):
     assert rvars["volume_number"] == 1
     assert rvars["platform_type"] == b"fixed"
     assert rvars["instrument_type"] == b"radar"
-    assert rvars["time_coverage_start"] == b"2024-05-22T16:00:47Z"
-    assert rvars["time_coverage_end"] == b"2024-05-22T16:03:20Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2024-05-22T16:00:47Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2024-05-22T16:03:20Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(45.6272661))
@@ -987,7 +1110,6 @@ def test_cfradial_n_points_file(cfradial1n_file):
         assert ds.sweep_mode == "azimuth_surveillance"
 
 
-@pytest.mark.run(order=1)
 @pytest.mark.parametrize("sweep", ["sweep_0", 0, [0, 1], ["sweep_0", "sweep_1"]])
 @pytest.mark.parametrize(
     "nexradlevel2_files", ["nexradlevel2_gzfile", "nexradlevel2_bzfile"], indirect=True
@@ -1016,8 +1138,8 @@ def test_open_nexradlevel2_datatree(nexradlevel2_files):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2016-06-01T15:00:25Z"
-    assert rvars["time_coverage_end"] == "2016-06-01T15:06:06Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2016-06-01T15:00:25Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2016-06-01T15:06:06Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(33.65414047))
@@ -1115,7 +1237,6 @@ def test_iris_dask_load(iris0_file):
     dsc.load()
 
 
-@pytest.mark.run(order=1)
 @pytest.mark.parametrize("sweep", ["sweep_0", 0, [0, 1], ["sweep_0", "sweep_1"]])
 @pytest.mark.parametrize(
     "uf_files", ["uf_file_1", "uf_file_2", "uf_file_3"], indirect=True
@@ -1141,8 +1262,8 @@ def test_open_uf_datatree(uf_file_1):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2011-04-27T16:42:32Z"
-    assert rvars["time_coverage_end"] == "2011-04-27T16:46:50Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2011-04-27T16:42:32Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2011-04-27T16:46:50Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(34.9318099))
@@ -1250,8 +1371,8 @@ STATION_VARS = {"latitude", "longitude", "altitude"}
 class TestStationCoordsOnRoot:
     """Verify station coords are on root and not on sweep nodes in DataTree."""
 
-    def test_odim_station_coords_on_root(self, odim_file):
-        dtree = open_odim_datatree(odim_file)
+    def test_odim_station_coords_on_root(self, odim_file, closing):
+        dtree = closing(open_odim_datatree(odim_file))
         assert STATION_VARS <= set(dtree.ds.coords)
         for name in [k for k in dtree.children if k.startswith("sweep_")]:
             sweep_ds = dtree[name].ds
@@ -1266,18 +1387,36 @@ class TestStationCoordsOnRoot:
             assert not (STATION_VARS & set(sweep_ds.coords))
             assert not (STATION_VARS & set(sweep_ds.data_vars))
 
-    def test_gamic_station_coords_on_root(self, gamic_file):
-        dtree = open_gamic_datatree(gamic_file)
+    def test_gamic_station_coords_on_root(self, gamic_file, closing):
+        dtree = closing(open_gamic_datatree(gamic_file))
         assert STATION_VARS <= set(dtree.ds.coords)
         for name in [k for k in dtree.children if k.startswith("sweep_")]:
             sweep_ds = dtree[name].ds
             assert not (STATION_VARS & set(sweep_ds.coords))
             assert not (STATION_VARS & set(sweep_ds.data_vars))
 
-    def test_cfradial1_station_coords_on_root(self, cfradial1_file):
-        dtree = open_cfradial1_datatree(cfradial1_file)
+    def test_cfradial1_station_coords_on_root(self, cfradial1_file, closing):
+        dtree = closing(open_cfradial1_datatree(cfradial1_file))
         assert STATION_VARS <= set(dtree.ds.coords)
         for name in [k for k in dtree.children if k.startswith("sweep_")]:
             sweep_ds = dtree[name].ds
             assert not (STATION_VARS & set(sweep_ds.coords))
             assert not (STATION_VARS & set(sweep_ds.data_vars))
+
+
+@pytest.mark.parametrize(
+    "fixture, opener",
+    [
+        ("odim_file", "open_odim_datatree"),
+        ("rainbow_file", "open_rainbow_datatree"),
+        ("hpl_file", "open_hpl_datatree"),
+    ],
+)
+def test_sweep_list_matches_sweep_int(request, fixture, opener, closing):
+    # sweep=[0] must select the same sweep as sweep=0 and "sweep_0" (#412)
+    filename = request.getfixturevalue(fixture)
+    open_datatree = getattr(xradar.io, opener)
+    expected = closing(open_datatree(filename, sweep=0))["sweep_0"].ds
+    for sweep in ([0], ["sweep_0"]):
+        dtree = closing(open_datatree(filename, sweep=sweep))
+        xr.testing.assert_identical(dtree["sweep_0"].ds, expected)
