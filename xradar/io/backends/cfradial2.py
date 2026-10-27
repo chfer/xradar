@@ -42,6 +42,7 @@ from xarray.backends import BackendEntrypoint
 from xarray.backends.common import datatree_from_dict_with_io_cleanup
 
 from ...model import (
+    _make_time_coverage_dataarray,
     georeferencing_correction_subgroup,
     get_altitude_attrs,
     get_azimuth_attrs,
@@ -359,20 +360,15 @@ def _derive_range_attrs(ds):
 
 
 def _normalize_root_attrs(ds):
-    time_attrs = get_time_attrs()
-    # time_coverage_* hold ISO strings in CfRadial files, a "units" attribute
-    # would make xarray try to decode them as numbers when read back
-    string_time_attrs = {k: v for k, v in time_attrs.items() if k != "units"}
+    for name in ("time_coverage_start", "time_coverage_end"):
+        if name in ds:
+            ds[name] = _make_time_coverage_dataarray(ds[name])
+
     for name, attrs in {
         "latitude": get_latitude_attrs(),
         "longitude": get_longitude_attrs(),
         "altitude": get_altitude_attrs(),
-        "time_coverage_start": time_attrs,
-        "time_coverage_end": time_attrs,
     }.items():
-        if name.startswith("time_coverage_") and name in ds:
-            if ds[name].dtype.kind in "USO":
-                attrs = string_time_attrs
         ds = _update_var_attrs(ds, name, attrs)
     return ds
 

@@ -27,6 +27,7 @@ __all__ = [
 
 __doc__ = __doc__.format("\n   ".join(__all__))
 
+import datetime as dt
 import warnings
 from importlib.metadata import version
 
@@ -34,6 +35,7 @@ import numpy as np
 import xarray as xr
 
 from ...model import (
+    _make_time_coverage_dataarray,
     georeferencing_correction_subgroup,
     radar_calibration_subgroup,
     radar_parameters_subgroup,
@@ -114,6 +116,17 @@ def _encode_string_variables(ds):
             # _Encoding, which Py-ART cannot read
             ds[name] = ds[name].str.encode("utf-8")
             ds[name].encoding.pop("dtype", None)
+    return ds
+
+
+def _format_cfradial1_time_coverage(ds):
+    """Encode CfRadial1 time-coverage variables as ISO 8601 UTC strings."""
+    for name in ("time_coverage_start", "time_coverage_end"):
+        if name not in ds:
+            continue
+        seconds = _make_time_coverage_dataarray(ds[name]).item()
+        timestamp = dt.datetime.fromtimestamp(seconds, dt.timezone.utc)
+        ds[name] = xr.DataArray(timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"))
     return ds
 
 
@@ -559,6 +572,8 @@ def _build_cfradial1_dataset(dtree, calibs=True):
             radar_georef.drop_vars(station, errors="ignore").reset_coords()
         )
 
+    # CfRadial1 specifies ISO 8601 character variables for time coverage.
+    cfradial1_ds = _format_cfradial1_time_coverage(cfradial1_ds)
     # CfRadial1 stores strings as char arrays; unicode/object strings would be
     # written as NC_STRING, which e.g. Py-ART can't read (#417)
     cfradial1_ds = _encode_string_variables(cfradial1_ds)

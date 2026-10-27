@@ -80,6 +80,10 @@ def minimal_dtree():
 def test_open_cfradial2_roundtrip(cfradial1_file, temp_file, closing):
     outfile = temp_file.with_suffix(".nc")
     with xd.io.open_cfradial1_datatree(cfradial1_file, first_dim="time") as dtree:
+        time_coverage = {
+            name: dtree.ds[name].item()
+            for name in ("time_coverage_start", "time_coverage_end")
+        }
         xd.io.to_cfradial2(dtree.copy(), outfile, engine="netcdf4")
         expected = (
             dtree["sweep_0"]
@@ -87,6 +91,16 @@ def test_open_cfradial2_roundtrip(cfradial1_file, temp_file, closing):
             .drop_vars(["latitude", "longitude", "altitude"], errors="ignore")
             .load()
         )
+
+    import netCDF4
+
+    with netCDF4.Dataset(outfile) as nc:
+        for name, value in time_coverage.items():
+            assert nc[name].dtype == np.dtype("float64")
+            assert nc[name].getncattr("units") == ("seconds since 1970-01-01T00:00:00Z")
+            assert nc[name].getncattr("calendar") == "standard"
+            assert nc[name].getncattr("standard_name") == "time"
+            assert nc[name][...] == value
 
     dtree2 = closing(xd.io.open_cfradial2_datatree(outfile, engine="netcdf4"))
 
@@ -537,17 +551,18 @@ def test_cfradial2_resolve_attrs_encoding():
     assert out["time"].encoding["units"] == "seconds since 2000-01-01"
 
 
-def test_cfradial2_reader_string_time_coverage_has_no_units(cfradial2_file):
-    # time_coverage_* are ISO strings, a "units" attribute would make xarray
-    # try to decode them as numbers when the written file is read again
+def test_cfradial2_reader_normalizes_time_coverage(cfradial2_file):
     with xd.open_datatree(cfradial2_file, engine="cfradial2") as dtree:
         for name in ("time_coverage_start", "time_coverage_end"):
-            if dtree.ds[name].dtype.kind in "USO":
-                assert "units" not in dtree.ds[name].attrs
+            assert dtree.ds[name].dtype == np.float64
+            assert dtree.ds[name].attrs["units"] == (
+                "seconds since 1970-01-01T00:00:00Z"
+            )
+            assert dtree.ds[name].attrs["calendar"] == "standard"
+            assert dtree.ds[name].attrs["standard_name"] == "time"
 
 
-def test_cfradial2_root_attrs_only_time_coverage_gets_string_time_attrs():
-    # string typed variables other than time_coverage_* keep their own attributes
+def test_cfradial2_root_normalizes_time_coverage():
     ds = xr.Dataset(
         {
             "longitude": ((), "8.5"),
@@ -556,7 +571,13 @@ def test_cfradial2_root_attrs_only_time_coverage_gets_string_time_attrs():
         }
     )
     out = cf2._normalize_root_attrs(ds)
-    assert out["time_coverage_start"].attrs == {"standard_name": "time"}
+    assert out["time_coverage_start"].dtype == np.float64
+    assert out["time_coverage_start"].item() == 1767225600.0
+    assert out["time_coverage_start"].attrs == {
+        "units": "seconds since 1970-01-01T00:00:00Z",
+        "calendar": "standard",
+        "standard_name": "time",
+    }
     assert out["longitude"].attrs.get("standard_name") == "longitude"
     assert out["longitude"].attrs.get("units") == "degrees_east"
     assert out["latitude"].attrs.get("standard_name") == "latitude"

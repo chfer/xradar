@@ -4,10 +4,68 @@
 
 """Tests for `xradar` model package."""
 
+from datetime import datetime, timedelta, timezone
+
 import numpy as np
 import pytest
+import xarray as xr
 
 from xradar import model
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-01-01T00:00:00Z",
+        b"2026-01-01T00:00:00Z",
+        np.datetime64("2026-01-01T00:00:00"),
+        datetime(2026, 1, 1, 1, tzinfo=timezone(timedelta(hours=1))),
+    ],
+)
+def test_make_time_coverage_dataarray(value):
+    var = model._make_time_coverage_dataarray(value)
+
+    assert var.ndim == 0
+    assert var.dtype == np.float64
+    assert var.item() == 1767225600.0
+    assert var.attrs == {
+        "units": "seconds since 1970-01-01T00:00:00Z",
+        "calendar": "standard",
+        "standard_name": "time",
+    }
+
+
+def test_make_time_coverage_dataarray_rejects_invalid_values():
+    with pytest.raises(ValueError, match="cannot be NaT"):
+        model._make_time_coverage_dataarray(np.datetime64("NaT"))
+
+    with pytest.raises(TypeError, match="must be a datetime"):
+        model._make_time_coverage_dataarray(1767225600.0)
+
+
+def test_make_time_coverage_dataarray_decodes_cf_numeric_time():
+    value = xr.DataArray(
+        1.0,
+        attrs={
+            "units": "hours since 2000-01-01T00:00:00Z",
+            "calendar": "standard",
+        },
+    )
+
+    var = model._make_time_coverage_dataarray(value)
+
+    assert var.item() == 946688400.0
+    assert var.dtype == np.float64
+    assert var.attrs["units"] == "seconds since 1970-01-01T00:00:00Z"
+
+
+def test_make_time_coverage_dataarray_preserves_nanoseconds():
+    var = model._make_time_coverage_dataarray("2026-01-01T00:00:00.123456789Z")
+
+    timestamp = np.datetime64("2026-01-01T00:00:00.123456789", "ns")
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    expected = np.float64((timestamp - epoch) / np.timedelta64(1, "s"))
+    assert var.item() == expected
 
 
 def test_get_range_attrs_with_float32_precision():

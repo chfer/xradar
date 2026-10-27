@@ -41,6 +41,7 @@ from xarray.backends.common import BackendEntrypoint, datatree_from_dict_with_io
 from xarray.backends.store import StoreBackendEntrypoint
 
 from ...model import (
+    _make_time_coverage_dataarray,
     conform_cfradial2_sweep_group,
     georeferencing_correction_subgroup,
     optional_root_attrs,
@@ -109,6 +110,10 @@ def _get_required_root_dataset(ds, optional=True):
     promote = _STATION_VARS & set(root.data_vars)
     if promote:
         root = root.set_coords(list(promote))
+
+    for name in ("time_coverage_start", "time_coverage_end"):
+        if name in root:
+            root[name] = _make_time_coverage_dataarray(root[name])
 
     return root
 

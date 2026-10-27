@@ -30,6 +30,7 @@ import xarray as xr
 
 from ... import util
 from ...model import (
+    _make_time_coverage_dataarray,
     georeferencing_correction_subgroup,
     optional_root_attrs,
     optional_root_vars,
@@ -265,9 +266,6 @@ def _assign_root(sweeps):
     time_coverage_start = min(times)
     time_coverage_end = max(times)
 
-    time_coverage_start_str = str(time_coverage_start)[:19] + "Z"
-    time_coverage_end_str = str(time_coverage_end)[:19] + "Z"
-
     # create root group from scratch
     root = xr.Dataset()  # data_vars=wrl.io.xarray.global_variables,
     # attrs=wrl.io.xarray.global_attrs)
@@ -282,8 +280,8 @@ def _assign_root(sweeps):
             "volume_number": 0,
             "platform_type": "fixed",
             "instrument_type": "radar",
-            "time_coverage_start": time_coverage_start_str,
-            "time_coverage_end": time_coverage_end_str,
+            "time_coverage_start": _make_time_coverage_dataarray(time_coverage_start),
+            "time_coverage_end": _make_time_coverage_dataarray(time_coverage_end),
             "latitude": sweeps[1]["latitude"],
             "longitude": sweeps[1]["longitude"],
             "altitude": sweeps[1]["altitude"],
@@ -735,11 +733,14 @@ reindex_angle : dict, optional
 """
 
 #: Reindex plus second-angle fix block, for backends that support both.
-REINDEX_PARAMS_DOC = REINDEX_COORD_DOC + """fix_second_angle : bool, optional
+REINDEX_PARAMS_DOC = (
+    REINDEX_COORD_DOC
+    + """fix_second_angle : bool, optional
     Correct erroneous secondary-angle values (azimuth on RHI,
     elevation on PPI). Only effective with ``first_dim="auto"``.
     Defaults to ``False``.
 """
+)
 
 #: Site-coordinate parameter block. Most multi-sweep backends spell this
 #: `site_coords`; IMD uses the legacy `site_as_coords`.

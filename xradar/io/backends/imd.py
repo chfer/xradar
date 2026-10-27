@@ -57,6 +57,7 @@ from xarray.backends.store import StoreBackendEntrypoint
 
 from ... import util
 from ...model import (
+    _make_time_coverage_dataarray,
     georeferencing_correction_subgroup,
     moment_attrs,
     radar_parameters_subgroup,
@@ -368,11 +369,21 @@ def _conform_imd_sweep(ds, first_dim="auto", site_as_coords=True):
 
     # Time coverage (stash as attrs so the datatree root helper can pick them up)
     if "esStartTime" in ds.variables:
-        tcs = ds["esStartTime"].dt.strftime("%Y-%m-%dT%H:%M:%SZ").values.item()
+        tcs = (
+            np.datetime_as_string(
+                ds["esStartTime"].values.astype("datetime64[ns]"), unit="ns"
+            )
+            + "Z"
+        )
         ds.attrs["time_coverage_start"] = tcs
         ds = ds.drop_vars("esStartTime")
     if "time" in ds.variables:
-        tce = ds["time"].max().dt.strftime("%Y-%m-%dT%H:%M:%SZ").values.item()
+        tce = (
+            np.datetime_as_string(
+                ds["time"].max().values.astype("datetime64[ns]"), unit="ns"
+            )
+            + "Z"
+        )
         ds.attrs["time_coverage_end"] = tce
 
     # First-dim handling: CfRadial2 default is time; auto swaps to azimuth/elevation
@@ -577,6 +588,12 @@ def _build_imd_root(sweeps):
     """Build a CfRadial2 root Dataset from a list of IMD sweep Datasets."""
     first = sweeps[0]
     last = sweeps[-1]
+    time_coverage_start = first.attrs.get("time_coverage_start")
+    if not time_coverage_start:
+        time_coverage_start = first["time"].min().values
+    time_coverage_end = last.attrs.get("time_coverage_end")
+    if not time_coverage_end:
+        time_coverage_end = last["time"].max().values
 
     root = xr.Dataset()
     root = root.assign(
@@ -584,8 +601,8 @@ def _build_imd_root(sweeps):
             "volume_number": 0,
             "platform_type": "fixed",
             "instrument_type": "radar",
-            "time_coverage_start": first.attrs.get("time_coverage_start", ""),
-            "time_coverage_end": last.attrs.get("time_coverage_end", ""),
+            "time_coverage_start": _make_time_coverage_dataarray(time_coverage_start),
+            "time_coverage_end": _make_time_coverage_dataarray(time_coverage_end),
         }
     )
 

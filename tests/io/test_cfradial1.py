@@ -2,6 +2,7 @@
 # Copyright (c) 2023-2024, openradar developers.
 # Distributed under the MIT License. See LICENSE for more info.
 
+import datetime as dt
 
 import numpy as np
 import pytest
@@ -282,8 +283,9 @@ def test_cfradial1_export_variable_gates_roundtrip(cfradial1n_file, tmp_path, cl
 
 
 def test_cfradial1_export_strings_as_char_arrays(odim_file, tmp_path, closing):
-    # string variables must be char arrays (not NC_STRING) and "None"
-    # placeholders must not be written as global attributes (#417)
+    # String variables, including CfRadial1 time coverage, must be char arrays
+    # (not NC_STRING). "None" placeholders must not be written as global
+    # attributes (#417).
     import netCDF4
 
     dtree = closing(xd.io.open_odim_datatree(odim_file, sweep=[0, 1]))
@@ -291,11 +293,17 @@ def test_cfradial1_export_strings_as_char_arrays(odim_file, tmp_path, closing):
     xd.io.to_cfradial1(dtree, path)
 
     with netCDF4.Dataset(path) as nc:
-        for name in ["time_coverage_start", "instrument_type", "prt_mode"]:
+        for name in ("time_coverage_start", "time_coverage_end"):
+            assert nc[name].dtype == np.dtype("S1")
+            expected = dt.datetime.fromtimestamp(
+                float(dtree.ds[name].item()), dt.timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            actual = netCDF4.chartostring(nc[name][:]).item()
+            if isinstance(actual, bytes):
+                actual = actual.decode("utf-8")
+            assert actual == expected
+        for name in ["instrument_type", "prt_mode"]:
             assert nc[name].dtype == np.dtype("S1"), name
-        assert netCDF4.chartostring(nc["time_coverage_start"][:]) == str(
-            dtree.ds.time_coverage_start.values
-        )
         attrs = {k: nc.getncattr(k) for k in nc.ncattrs()}
     assert "None" not in attrs.values()
     assert not attrs["history"].startswith(("None", ":"))

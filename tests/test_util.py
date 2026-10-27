@@ -22,6 +22,20 @@ from xradar.io.backends.common import (
 )
 
 
+def _seconds_since_epoch(timestamp: str | np.datetime64):
+    if isinstance(timestamp, str):
+        timestamp = timestamp.removesuffix("Z")
+    value = np.datetime64(timestamp, "ns")
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    return np.float64((value - epoch) / np.timedelta64(1, "s"))
+
+
+def _assert_time_coverage(value, timestamp):
+    expected = _seconds_since_epoch(timestamp)
+    actual = value.item()
+    assert expected <= actual < expected + 1
+
+
 @pytest.fixture(
     params=[("PPI", "azimuth", "elevation"), ("RHI", "elevation", "azimuth")]
 )
@@ -365,16 +379,16 @@ def test_apply_to_sweeps(cfradial1_sgp_file, closing):
     # Verify that the dummy field has been added to each sweep
     sweep_keys = util.get_sweep_keys(modified_dtree)
     for key in sweep_keys:
-        assert (
-            "dummy_field" in modified_dtree[key].data_vars
-        ), f"dummy_field not found in {key}"
+        assert "dummy_field" in modified_dtree[key].data_vars, (
+            f"dummy_field not found in {key}"
+        )
         assert modified_dtree[key]["dummy_field"].attrs["units"] == "dBZ"
         assert modified_dtree[key]["dummy_field"].attrs["long_name"] == "Dummy Field"
 
     # Check that the original data has not been modified
-    assert (
-        "dummy_field" not in dtree["/"].data_vars
-    ), "dummy_field should not be in the root node"
+    assert "dummy_field" not in dtree["/"].data_vars, (
+        "dummy_field should not be in the root node"
+    )
 
     # Test that an exception is raised when a function that causes an error is applied
     with pytest.raises(ValueError, match="This is an intentional error"):
@@ -434,25 +448,25 @@ def test_apply_to_volume(cfradial1_sgp_file, closing):
     modified_dtree = util.apply_to_volume(dtree, dummy_function)
 
     # Verify that the modified_dtree is an instance of DataTree
-    assert isinstance(
-        modified_dtree, xr.DataTree
-    ), "The result should be a DataTree instance."
+    assert isinstance(modified_dtree, xr.DataTree), (
+        "The result should be a DataTree instance."
+    )
 
     # Verify that the dummy field has been added to each sweep
     sweep_keys = util.get_sweep_keys(modified_dtree)
     for key in sweep_keys:
-        assert (
-            "dummy_field" in modified_dtree[key].data_vars
-        ), f"dummy_field not found in {key}"
+        assert "dummy_field" in modified_dtree[key].data_vars, (
+            f"dummy_field not found in {key}"
+        )
         assert modified_dtree[key]["dummy_field"].attrs["units"] == "dBZ"
         assert modified_dtree[key]["dummy_field"].attrs["long_name"] == "Dummy Field"
 
     # Check that the original DataTree (dtree) has not been modified
     original_sweep_keys = util.get_sweep_keys(dtree)
     for key in original_sweep_keys:
-        assert (
-            "dummy_field" not in dtree[key].data_vars
-        ), f"dummy_field should not be in the original DataTree at {key}"
+        assert "dummy_field" not in dtree[key].data_vars, (
+            f"dummy_field should not be in the original DataTree at {key}"
+        )
 
     # Test edge case: Apply a function that modifies only certain sweeps
     def selective_function(ds):
@@ -467,13 +481,13 @@ def test_apply_to_volume(cfradial1_sgp_file, closing):
     # Verify that the selective field was added only where the condition was met
     for key in sweep_keys:
         if "reflectivity_horizontal" in modified_dtree[key].data_vars:
-            assert (
-                "selective_field" in selectively_modified_dtree[key].data_vars
-            ), f"selective_field not found in {key} where it should have been added."
+            assert "selective_field" in selectively_modified_dtree[key].data_vars, (
+                f"selective_field not found in {key} where it should have been added."
+            )
         else:
-            assert (
-                "selective_field" not in selectively_modified_dtree[key].data_vars
-            ), f"selective_field should not be present in {key}"
+            assert "selective_field" not in selectively_modified_dtree[key].data_vars, (
+                f"selective_field should not be present in {key}"
+            )
 
     # Test that an exception is raised when a function that causes an error is applied
     with pytest.raises(ValueError, match="This is an intentional error"):
@@ -540,8 +554,8 @@ def test_get_required_root_dataset():
         30.0,
     ]
     assert len(root.variables) == 10
-    assert root.variables["time_coverage_start"] == "2013-11-25T10:55:04Z"
-    assert root.variables["time_coverage_end"] == "2013-11-25T10:59:24Z"
+    _assert_time_coverage(root.variables["time_coverage_start"], "2013-11-25T10:55:04Z")
+    _assert_time_coverage(root.variables["time_coverage_end"], "2013-11-25T10:59:24Z")
     np.testing.assert_equal(
         root.variables["sweep_fixed_angle"].values, np.array(elevations)
     )
@@ -652,8 +666,8 @@ def test_create_volume(closing):
         min_angle=0.5,
         max_angle=5.0,
     )
-    assert volume.ds.time_coverage_start == "2023-04-20T06:50:00Z"
-    assert volume.ds.time_coverage_end == "2023-04-20T06:55:00Z"
+    _assert_time_coverage(volume.ds.time_coverage_start, "2023-04-20T06:50:00Z")
+    _assert_time_coverage(volume.ds.time_coverage_end, "2023-04-20T06:55:00Z")
     sweep_group_name = ["sweep_0", "sweep_1", "sweep_2"]
     np.testing.assert_array_equal(volume.ds.sweep_group_name, sweep_group_name)
     angles = [3.6, 1.6, 1.0]
@@ -678,8 +692,16 @@ def test_create_volume(closing):
     volume = util.create_volume(
         sweeps=sweeps,
     )
-    assert volume.ds.time_coverage_start == "2023-04-20T06:50:01Z"
-    assert volume.ds.time_coverage_end == "2023-04-20T06:59:46Z"
+    times = np.concatenate(
+        [
+            xr.decode_cf(dtree[key].ds)["time"].values.astype("datetime64[ns]")
+            for dtree in sweeps
+            for key in util.get_sweep_keys(dtree)
+        ]
+    )
+    times = times[~np.isnat(times)]
+    assert volume.ds.time_coverage_start.item() == _seconds_since_epoch(times.min())
+    assert volume.ds.time_coverage_end.item() == _seconds_since_epoch(times.max())
 
 
 @pytest.mark.parametrize("first_dim", ["auto", "time"])

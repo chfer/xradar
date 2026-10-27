@@ -37,6 +37,7 @@ import sys
 import h5py
 import numpy as np
 
+from ...model import _make_time_coverage_dataarray
 from ..backends.odim import _ODIM_SOURCE_TO_GLOBAL_ATTRS, ODIM_TO_FM301_NAMES
 
 FM301_TO_ODIM_NAMES = {v: k for k, v in ODIM_TO_FM301_NAMES.items()}
@@ -220,8 +221,16 @@ def to_odim(
         what["object"] = "SCAN"
     # todo: parameterize version
     what["version"] = "H5rad 2.2"
-    what["date"] = str(root["time_coverage_start"].values)[:10].replace("-", "")
-    what["time"] = str(root["time_coverage_end"].values)[11:19].replace(":", "")
+    start = dt.datetime.fromtimestamp(
+        _make_time_coverage_dataarray(root["time_coverage_start"]).item(),
+        dt.timezone.utc,
+    )
+    end = dt.datetime.fromtimestamp(
+        _make_time_coverage_dataarray(root["time_coverage_end"]).item(),
+        dt.timezone.utc,
+    )
+    what["date"] = start.strftime("%Y%m%d")
+    what["time"] = end.strftime("%H%M%S")
 
     what["source"] = source
 

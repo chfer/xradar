@@ -48,7 +48,11 @@ import numpy as np
 import xarray as xr
 from scipy import interpolate
 
-from .model import required_sweep_metadata_vars, sweep_dataset_vars
+from .model import (
+    _make_time_coverage_dataarray,
+    required_sweep_metadata_vars,
+    sweep_dataset_vars,
+)
 
 
 def has_import(pkg_name):
@@ -899,27 +903,6 @@ def select_sweep_dataset_vars(sweep, select, ancillary=False, optional_metadata=
     return sweep_out
 
 
-def round_datetime64_to_second(dt):
-    """
-    Round numpy.datetime64 to nearest second (ties go up).
-    """
-    # Convert to integer nanoseconds since epoch
-    ns = dt.astype("datetime64[ns]").astype("int64")
-    one_sec = 1_000_000_000
-    # Add half a second, then floor-divide to get true rounding
-    ns_rounded = ((ns + one_sec // 2) // one_sec) * one_sec
-    # Construct back from epoch + timedelta
-    return np.datetime64(0, "ns") + np.timedelta64(ns_rounded, "ns")
-
-
-def format_zulu(dt):
-    """
-    Round to nearest second and format as ISO 8601 with 'Z' (UTC).
-    """
-    rounded = round_datetime64_to_second(dt).astype("datetime64[s]")
-    return str(rounded) + "Z"
-
-
 def create_volume(
     sweeps,
     time_coverage_start=None,
@@ -981,15 +964,11 @@ def create_volume(
 
     # Step 6: Assign time coverage
     if time_coverage_start is None:
-        root_ds["time_coverage_start"] = format_zulu(sweep_entries[0][1])
-    else:
-        root_ds["time_coverage_start"] = time_coverage_start.strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        time_coverage_start = sweep_entries[0][1]
+    root_ds["time_coverage_start"] = _make_time_coverage_dataarray(time_coverage_start)
     if time_coverage_end is None:
-        root_ds["time_coverage_end"] = format_zulu(sweep_entries[-1][2])
-    else:
-        root_ds["time_coverage_end"] = time_coverage_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+        time_coverage_end = sweep_entries[-1][2]
+    root_ds["time_coverage_end"] = _make_time_coverage_dataarray(time_coverage_end)
 
     root_ds.attrs["volume_number"] = volume_number
 

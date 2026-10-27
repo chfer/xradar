@@ -59,6 +59,8 @@ __all__ = [
 
 __doc__ = __doc__.format("\n   ".join(__all__))
 
+from datetime import datetime, timezone
+
 import numpy as np
 from xarray import DataArray, Dataset, decode_cf
 
@@ -744,6 +746,72 @@ def get_time_attrs(date_str="1970-01-01T00:00:00Z", date_unit="seconds"):
         "units": f"{date_unit} since {date_str}",
     }
     return time_attrs
+
+
+def _make_time_coverage_dataarray(value):
+    """Create a scalar FM301 time-coverage variable from a datetime value."""
+    # DataArray: scalar variable read from a file by the CfRadial1 reader
+    # (char array, dtype |S32, i.e. bytes) and the CfRadial2 reader (char/str
+    # array, or datetime64[ns] when xarray already decoded it).
+    # The numeric-with-units case is for files that already follow the
+    # double convention.
+    if isinstance(value, DataArray):
+        if value.ndim != 0:
+            raise ValueError("time coverage variable must be scalar")
+        if np.issubdtype(value.dtype, np.number):
+            if "units" not in value.attrs:
+                raise ValueError(
+                    "numeric time coverage variable must have CF time units"
+                )
+            value = decode_cf(Dataset({"time_coverage": value}))[
+                "time_coverage"
+            ].to_numpy()[()]
+        else:
+            value = value.to_numpy()[()]
+
+    # bytes: UTF-8 encoded ISO 8601 text, e.g. the content of a CfRadial1
+    # char array after the DataArray branch above (b"2008-06-04T00:15:03Z").
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+
+    # str: native ISO 8601 string, from CfRadial2 files and from the IMD
+    # backend (esStartTime / time attributes).
+    if isinstance(value, str):
+        if value.endswith("Z"):
+            value = np.datetime64(value[:-1], "ns")
+        else:
+            value = datetime.fromisoformat(value)
+
+    # datetime: Python datetime, only when the user passes time_coverage_start/
+    # end to util.create_volume.
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        value = np.datetime64(value, "ns")
+    # np.datetime64: min/max of the sweep "time" in common._assign_root, used by
+    # ODIM, GAMIC, Furuno, Rainbow, IRIS, DataMet, NEXRAD Level 2 (ns) and
+    # HPL, Metek, UF (us); also the create_volume sweep entries.
+    elif isinstance(value, np.datetime64):
+        value = value.astype("datetime64[ns]")
+    else:
+        raise TypeError(
+            "time coverage value must be a datetime, ISO 8601 string, or bytes; "
+            f"got {type(value).__name__}"
+        )
+
+    if np.isnat(value):
+        raise ValueError("time coverage value cannot be NaT")
+
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    seconds = np.float64((value - epoch) / np.timedelta64(1, "s"))
+    return DataArray(
+        seconds,
+        attrs={
+            "units": "seconds since 1970-01-01T00:00:00Z",
+            "calendar": "standard",
+            "standard_name": "time",
+        },
+    )
 
 
 def get_nyquist_velocity_attrs(units="m s-1"):

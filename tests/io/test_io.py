@@ -4,6 +4,8 @@
 
 """Tests for `io` module."""
 
+import datetime as dt
+
 import fsspec
 import h5py
 import numpy as np
@@ -30,6 +32,19 @@ from xradar.model import (
 )
 
 
+def _seconds_since_epoch(timestamp: str):
+    value = np.datetime64(timestamp.removesuffix("Z"), "ns")
+    epoch = np.datetime64("1970-01-01T00:00:00", "ns")
+    return np.float64((value - epoch) / np.timedelta64(1, "s"))
+
+
+def _assert_time_coverage(value, timestamp):
+    expected = _seconds_since_epoch(timestamp)
+    # The reference timestamp has whole-second precision, while coverage can
+    # retain fractional seconds; require it to fall within that one-second span.
+    assert expected <= value < expected + 1
+
+
 def test_open_cfradial1_datatree(cfradial1_file, closing):
     dtree = closing(
         open_cfradial1_datatree(cfradial1_file, first_dim="time", site_as_coords=False)
@@ -51,8 +66,8 @@ def test_open_cfradial1_datatree(cfradial1_file, closing):
     assert rvars["volume_number"] == 36
     assert rvars["platform_type"] == b"fixed"
     assert rvars["instrument_type"] == b"radar"
-    assert rvars["time_coverage_start"] == b"2008-06-04T00:15:03Z"
-    assert rvars["time_coverage_end"] == b"2008-06-04T00:22:17Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2008-06-04T00:15:03Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2008-06-04T00:22:17Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(22.526699))
@@ -127,8 +142,8 @@ def test_open_odim_datatree(odim_file, closing):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2018-12-20T06:06:28Z"
-    assert rvars["time_coverage_end"] == "2018-12-20T06:10:42Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2018-12-20T06:06:28Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2018-12-20T06:10:42Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(-33.7008018))
@@ -275,8 +290,8 @@ def test_open_gamic_datatree(gamic_file, closing):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2018-06-01T05:40:47Z"
-    assert rvars["time_coverage_end"] == "2018-06-01T05:44:16Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2018-06-01T05:40:47Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2018-06-01T05:44:16Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(50.9287272))
@@ -520,8 +535,8 @@ def test_open_rainbow_datatree(rainbow_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2013-05-10T00:00:06Z"
-    assert rvars["time_coverage_end"] == "2013-05-10T00:03:14Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2013-05-10T00:00:06Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2013-05-10T00:03:14Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(50.856633))
@@ -613,8 +628,8 @@ def test_open_iris_datatree(iris0_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2013-11-25T10:55:04Z"
-    assert rvars["time_coverage_end"] == "2013-11-25T10:59:24Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2013-11-25T10:55:04Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2013-11-25T10:59:24Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(9.331))
@@ -748,6 +763,14 @@ def test_odim_roundtrip(odim_file2, temp_file, compression, compression_opts, cl
         compression=compression,
         compression_opts=compression_opts,
     )
+    start = dt.datetime.fromtimestamp(
+        dtree.ds.time_coverage_start.item(), dt.timezone.utc
+    )
+    end = dt.datetime.fromtimestamp(dtree.ds.time_coverage_end.item(), dt.timezone.utc)
+    with h5py.File(temp_file, "r") as exported:
+        assert exported["what"].attrs["date"].decode() == start.strftime("%Y%m%d")
+        assert exported["what"].attrs["time"].decode() == end.strftime("%H%M%S")
+
     dtree2 = closing(open_odim_datatree(temp_file, reindex_angle=False))
     for d0, d1 in zip(dtree.groups, dtree2.groups):
         xr.testing.assert_equal(dtree[d0].ds, dtree2[d1].ds)
@@ -961,8 +984,8 @@ def test_open_datamet_datatree(datamet_file):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2019-07-10T07:00:00Z"
-    assert rvars["time_coverage_end"] == "2019-07-10T07:00:00Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2019-07-10T07:00:00Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2019-07-10T07:00:00Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(41.9394))
@@ -1045,8 +1068,8 @@ def test_cfradial_n_points_file(cfradial1n_file, closing):
     assert rvars["volume_number"] == 1
     assert rvars["platform_type"] == b"fixed"
     assert rvars["instrument_type"] == b"radar"
-    assert rvars["time_coverage_start"] == b"2024-05-22T16:00:47Z"
-    assert rvars["time_coverage_end"] == b"2024-05-22T16:03:20Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2024-05-22T16:00:47Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2024-05-22T16:03:20Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(45.6272661))
@@ -1115,8 +1138,8 @@ def test_open_nexradlevel2_datatree(nexradlevel2_files):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2016-06-01T15:00:25Z"
-    assert rvars["time_coverage_end"] == "2016-06-01T15:06:06Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2016-06-01T15:00:25Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2016-06-01T15:06:06Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(33.65414047))
@@ -1239,8 +1262,8 @@ def test_open_uf_datatree(uf_file_1):
     assert rvars["volume_number"] == 0
     assert rvars["platform_type"] == "fixed"
     assert rvars["instrument_type"] == "radar"
-    assert rvars["time_coverage_start"] == "2011-04-27T16:42:32Z"
-    assert rvars["time_coverage_end"] == "2011-04-27T16:46:50Z"
+    _assert_time_coverage(rvars["time_coverage_start"], "2011-04-27T16:42:32Z")
+    _assert_time_coverage(rvars["time_coverage_end"], "2011-04-27T16:46:50Z")
     # station coords are now coordinates on root, not data_vars
     rcoords = dtree.ds.coords
     np.testing.assert_almost_equal(rcoords["latitude"].values, np.array(34.9318099))
